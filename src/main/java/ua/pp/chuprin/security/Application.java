@@ -141,11 +141,13 @@ public class Application {
 				"xst -k " + getPrincipalKeyTab(daemon) + " " + getPrincipalFullName(daemon)));
 	}
 
-	private static String kadminQuery(Cluster cluster, String query) {
-		return "kadmin -r " + cluster.realm +
-				" -p " + cluster.rootPrincipal +
-				" -w " + cluster.rootPassword +
-				" -q \"" + query + "\"";
+	private static String[] kadminQuery(Cluster cluster, String query) {
+		return new String[] { "kadmin",
+				"-r " + cluster.realm,
+				"-p " + cluster.rootPrincipal,
+				"-w " + cluster.rootPassword,
+				"-s master.hadoop.lan ",
+				"-q \"" + query + "\""};
 	}
 
 	private static void createPrincipal(Daemon daemon) throws IOException, InterruptedException {
@@ -165,9 +167,17 @@ public class Application {
 		return principalName(daemon.type) + "/" + daemon.getNode().hostName + "@" + daemon.getNode().getCluster().realm;
 	}
 
-	private static String execLocal(String command) throws IOException, InterruptedException {
-		log.write("localhost >> : " + command + "\n");
-		Process process = Runtime.getRuntime().exec(command);
+	private static String execLocal(String[] command) throws IOException, InterruptedException {
+		String commandString = "";
+		for (String s : command) {
+			commandString += " " + s;
+		}
+		log.write("localhost >> : " + commandString + "\n");
+
+		ProcessBuilder builder = new ProcessBuilder();
+		builder.command(command);
+		builder.environment().putAll(System.getenv());
+		Process process = builder.start();
 
 		String result = readStream(process.getInputStream());
 		log.write("localhost << : " + result + "\n");
