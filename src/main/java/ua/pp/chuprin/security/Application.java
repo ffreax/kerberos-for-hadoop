@@ -12,38 +12,46 @@ import java.io.*;
 
 public class Application {
 
-	private static Session kerb;
+	private static FileWriter log = null;
+	private static final XStream XSTREAM = new XStream(new StaxDriver());
 
 	public static void main(String[] args) throws IOException, InterruptedException, JSchException, SftpException {
-		Cluster cluster = readClusterInfo();
-		String coreSite = ConfigHelper.buildCoreSite();
-		for (Node node : cluster.nodes) {
-			Session session = null;
-			try {
-				session = connect(node);
+		log = new FileWriter("runtime.log");
+		try {
+			Cluster cluster = readClusterInfo();
+			String coreSite = ConfigHelper.buildCoreSite();
+			for (Node node : cluster.nodes) {
+				Session session = null;
+				try {
+					session = connect(node);
 
-				String dataNode = "";
-				String taskTracker = "";
-				for (Daemon daemon : node.daemons) {
-					createPrincipal(daemon);
-					createKeyTab(daemon);
-					transferKeyTab(session, daemon);
+					String dataNode = "";
+					String taskTracker = "";
+					for (Daemon daemon : node.daemons) {
+						createPrincipal(daemon);
+						createKeyTab(daemon);
+						transferKeyTab(session, daemon);
 
-					if(daemon.type == DaemonType.TASK_TRACKER) {
-						taskTracker = ConfigHelper.buildTaskTracker(daemon);
-					} else if(daemon.type == DaemonType.DATA_NODE) {
-						dataNode = ConfigHelper.buildDataNode(daemon);
+						if(daemon.type == DaemonType.TASK_TRACKER) {
+							taskTracker = ConfigHelper.buildTaskTracker(daemon);
+						} else if(daemon.type == DaemonType.DATA_NODE) {
+							dataNode = ConfigHelper.buildDataNode(daemon);
+						}
+					}
+					appendConfig(node, session, "core-site.xml", coreSite);
+
+					appendConfig(node, session, "hdfs-site.xml", ConfigHelper.buildHdfsSite(cluster, dataNode));
+
+					appendConfig(node, session, "mapred-site.xml", ConfigHelper.buildMapredSite(cluster, taskTracker));
+				} finally {
+					if(session != null) {
+						session.disconnect();
 					}
 				}
-				appendConfig(node, session, "core-site.xml", coreSite);
-
-				appendConfig(node, session, "hdfs-site.xml", ConfigHelper.buildHdfsSite(cluster, dataNode));
-
-				appendConfig(node, session, "mapred-site.xml", ConfigHelper.buildMapredSite(cluster, taskTracker));
-			} finally {
-				if(session != null) {
-					session.disconnect();
-				}
+			}
+		} finally {
+			if(log != null) {
+				log.close();
 			}
 		}
 	}
@@ -82,9 +90,10 @@ public class Application {
 	}
 
 	private static String execRemote(Session session, String command) throws JSchException, IOException {
+		log.write(session.getHost() + " >> : " + command + "\n");
+
 		ChannelExec connection = null;
 		try {
-
 			connection = (ChannelExec) session.openChannel("exec");
 
 			connection.setCommand(command);
@@ -108,7 +117,6 @@ public class Application {
 				}
 
 				if (connection.isClosed()) {
-					System.out.println("exit-status: " + connection.getExitStatus());
 					break;
 				}
 				try {
@@ -119,18 +127,30 @@ public class Application {
 				}
 			}
 
-			return result.toString().trim();
+			String response = result.toString().trim();
+
+			log.write(session.getHost() + " << : " + response + "\n");
+			return response;
 		} finally {
 			connection.disconnect();
 		}
 	}
 
 	private static void createKeyTab(Daemon daemon) throws IOException, InterruptedException {
-		execLocal("kadmin.local -q \"xst -k " + getPrincipalKeyTab(daemon) + " " + getPrincipalFullName(daemon) + "\"");
+		execLocal(kadminQuery(daemon.getNode().getCluster(),
+				"xst -k " + getPrincipalKeyTab(daemon) + " " + getPrincipalFullName(daemon)));
+	}
+
+	private static String kadminQuery(Cluster cluster, String query) {
+		return "kadmin -r " + cluster.realm +
+				" -p " + cluster.rootPrincipal +
+				" -w " + cluster.rootPassword +
+				" -q \"" + query + "\"";
 	}
 
 	private static void createPrincipal(Daemon daemon) throws IOException, InterruptedException {
-		execLocal("kadmin.local -q \"addprinc -randkey " + getPrincipalFullName(daemon) + "\"");
+		execLocal(kadminQuery(daemon.getNode().getCluster(),
+				"addprinc -randkey " + getPrincipalFullName(daemon)));
 	}
 
 	public static String getPrincipalFullKeyTab(Daemon daemon) {
@@ -146,27 +166,43 @@ public class Application {
 	}
 
 	private static String execLocal(String command) throws IOException, InterruptedException {
+		log.write("localhost >> : " + command + "\n");
 		Process process = Runtime.getRuntime().exec(command);
+
+		String result = readStream(process.getInputStream());
+		log.write("localhost << : " + result + "\n");
+
+		int returnCode = process.waitFor();
+
+		if(returnCode != 0) {
+			log.write("localhost <<:err : " + readStream(process.getErrorStream()) + "\n");
+
+			throw new IllegalStateException("Error (" + returnCode + ") while execute: " + command);
+		}
+
+		return result;
+	}
+
+	private static String readStream(InputStream inputStream) throws IOException {
 		BufferedReader in = null;
+		String result;
 		try {
-			in = new BufferedReader(new InputStreamReader(process.getInputStream()));
+			InputStreamReader inputStreamReader = new InputStreamReader(inputStream);
+			in = new BufferedReader(inputStreamReader);
 
 			StringBuffer buffer = new StringBuffer();
 			String line;
 			while ((line = in.readLine()) != null) {
 				buffer.append(line);
 			}
-			int returnCode = process.waitFor();
-			if(returnCode != 0) {
-				throw new IllegalStateException("Error while execute: " + command);
-			}
 
-			return buffer.toString();
+			result = buffer.toString();
 		} finally {
 			if(in != null) {
 				in.close();
 			}
 		}
+		return result;
 	}
 
 	private static String principalName(DaemonType type) {
@@ -187,58 +223,10 @@ public class Application {
 	}
 
 	private static Cluster readClusterInfo() {
-//		Daemon nameDaemon = new Daemon(DaemonType.NAME_NODE);
-//		Daemon taskDaemon = new Daemon(DaemonType.TASK_TRACKER);
-//		Node master = new Node("master.hadoop.lan", new ArrayList<Daemon>(Arrays.asList(nameDaemon, taskDaemon)),
-//				new User("hduser",
-//					"d:/Google Диск/ВУЗ/диплом/clusters/local/hadoop-master-hduser.pub.key",
-//					"d:/Google Диск/ВУЗ/диплом/clusters/local/hadoop-master-hduser.key"),
-//				22, "/opt/hadoop/conf", "/etc/security/keytabs", "hduser:hadoop");
-//		nameDaemon.setNode(master);
-//		taskDaemon.setNode(master);
-//
-//		Daemon secondaryNameDaemon = new Daemon(DaemonType.SECONDARY_NAME_NODE);
-//		Node backup = new Node("master.hadoop.lan", new ArrayList<Daemon>(Arrays.asList(secondaryNameDaemon)),
-//				new User("hduser",
-//						"d:/Google Диск/ВУЗ/диплом/clusters/local/hadoop-backup-hduser.pub.key",
-//						"d:/Google Диск/ВУЗ/диплом/clusters/local/hadoop-backup-hduser.key"),
-//				22, "/opt/hadoop/conf", "/etc/security/keytabs", "hduser:hadoop");
-//		secondaryNameDaemon.setNode(backup);
-//
-//		Daemon jobTracker1 = new Daemon(DaemonType.JOB_TRACKER);
-//		Daemon dataTracker1 = new Daemon(DaemonType.DATA_NODE);
-//		Node hadoop1 = new Node("master.hadoop.lan", new ArrayList<Daemon>(Arrays.asList(jobTracker1, dataTracker1)),
-//				new User("hduser",
-//						"d:/Google Диск/ВУЗ/диплом/clusters/local/hadoop-hadoop1-hduser.pub.key",
-//						"d:/Google Диск/ВУЗ/диплом/clusters/local/hadoop-hadoop1-hduser.key"),
-//				22, "/opt/hadoop/conf", "/etc/security/keytabs", "hduser:hadoop");
-//		jobTracker1.setNode(hadoop1);
-//		dataTracker1.setNode(hadoop1);
-//
-//		Cluster cluster = new Cluster(new ArrayList<Node>(Arrays.asList(master, backup, hadoop1)), "HADOOP.LAN");
-//		master.setCluster(cluster);
-//		backup.setCluster(cluster);
-//		hadoop1.setCluster(cluster);
-//
-//		String xml = xstream.toXML(cluster);
+		Cluster cluster = (Cluster) XSTREAM.fromXML(new File("cluster.xml"));
+		resolveBidirectionals(cluster);
 
-		XStream xstream = new XStream(new StaxDriver());
-		Cluster cluster2 = (Cluster) xstream.fromXML(new File("D:\\projects\\kerberos-for-hadoop\\settigs.xml"));
-		resolveBidirectionals(cluster2);
-
-		try {
-			kerb = connect(cluster2.getNameNode().getNode());
-			String result = execRemote(kerb, "echo \"test\"");
-			String result2 = execLocal("ls -l");
-		} catch (JSchException e) {
-			e.printStackTrace();
-		} catch (IOException e) {
-			e.printStackTrace();  //To change body of catch statement use File | Settings | File Templates.
-		} catch (InterruptedException e) {
-			e.printStackTrace();  //To change body of catch statement use File | Settings | File Templates.
-		}
-
-		return cluster2;
+		return cluster;
 	}
 
 	private static void resolveBidirectionals(Cluster cluster) {

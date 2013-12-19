@@ -5,12 +5,15 @@ import java.util.List;
 
 public class Cluster {
 	public final List<Node> nodes;
-
 	public final String realm;
+	public final String rootPrincipal;
+	public final String rootPassword;
 
-	public Cluster(List<Node> nodes, String realm) {
+	public Cluster(List<Node> nodes, String realm, String rootPrincipal, String rootPassword) {
 		this.nodes = nodes;
 		this.realm = realm;
+		this.rootPrincipal = rootPrincipal;
+		this.rootPassword = rootPassword;
 	}
 
 	public Daemon getNameNode() {
