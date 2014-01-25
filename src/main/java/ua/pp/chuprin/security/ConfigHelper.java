@@ -83,6 +83,22 @@ public class ConfigHelper {
 				"\t\t<description>Combined keytab file containing the NameNode service and host principals.</description>\n" +
 				"\t</property>\n" +
 				"\n" +
+				"\t<property>\n" +
+				"\t\t<name>dfs.datanode.address</name>\n" +
+				"\t\t<value>0.0.0.0:1021</value>\n" +
+				"\t\t<description>The address, with a privileged port - any port number under 1023. Example: 0.0.0.0:1019</description>\n" +
+				"\t</property>\n" +
+				"\t<property>\n" +
+				"\t\t<name>dfs.datanode.http.address</name>\n" +
+				"\t\t<value>0.0.0.0:1022</value>\n" +
+				"\t\t<description>The address, with a privileged port - any port number under 1023. Example: 0.0.0.0:1022</description>\n" +
+				"\t</property>\n" +
+				"\t<property>\n" +
+				"\t\t<name>dfs.namenode.edits.toleration.length</name>\n" +
+				"\t\t<value>-1</value>\n" +
+				"\t\t<description> Prevents corruption of NameNode edit log.</description>\n" +
+				"\t</property>\n" +
+				"\n" +
 				dataNode;
 	}
 
@@ -116,7 +132,7 @@ public class ConfigHelper {
 				"\t</property>\n" +
 				"\t<property>\n" +
 				"\t\t<name>hadoop.security.auth_to_local</name>\n" +
-				"\t\t<value>hduser</value>\n" +
+				"\t\t<value>DEFAULT</value>\n" +
 				"\t\t<description>The mapping from Kerberos principal names to local OS user names.</description>\n" +
 				"\t</property>";
 	}

@@ -1,14 +1,14 @@
 package ua.pp.chuprin.security.hadoop;
 
-import ua.pp.chuprin.security.ssh.User;
+import ua.pp.chuprin.security.ssh.UserIdentity;
 
 import java.util.List;
 
 public class Node {
 
-	public final String hostName;
 	public final List<Daemon> daemons;
-	public final User sshUser;
+	public final String hostName;
+	public final UserIdentity sshUserIdentity;
 	public final int sshPort;
 
 	public final String conf;
@@ -17,9 +17,9 @@ public class Node {
 
 	private Cluster cluster;
 
-	public Node(String hostName, List<Daemon> daemons, User sshUser, int sshPort, String conf, String keyTab, String hadoopUser) {
+	public Node(String hostName, List<Daemon> daemons, UserIdentity sshUserIdentity, int sshPort, String conf, String keyTab, String hadoopUser) {
 		this.hostName = hostName;
-		this.sshUser = sshUser;
+		this.sshUserIdentity = sshUserIdentity;
 		this.daemons = daemons;
 		this.sshPort = sshPort;
 		this.conf = conf;

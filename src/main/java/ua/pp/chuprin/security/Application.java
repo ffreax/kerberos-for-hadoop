@@ -7,6 +7,7 @@ import ua.pp.chuprin.security.hadoop.Cluster;
 import ua.pp.chuprin.security.hadoop.Daemon;
 import ua.pp.chuprin.security.hadoop.DaemonType;
 import ua.pp.chuprin.security.hadoop.Node;
+import ua.pp.chuprin.security.ssh.UserIdentity;
 
 import java.io.*;
 
@@ -16,20 +17,23 @@ public class Application {
 	private static final XStream XSTREAM = new XStream(new StaxDriver());
 
 	public static void main(String[] args) throws IOException, InterruptedException, JSchException, SftpException {
-		log = new FileWriter("runtime.log");
+		Session kerberos = null;
 		try {
+			log = new FileWriter("runtime.log");
+
 			Cluster cluster = readClusterInfo();
+			kerberos = connect(cluster.kerberosSsh, cluster.kerberosHostName, cluster.kerberosSshPort);
 			String coreSite = ConfigHelper.buildCoreSite();
 			for (Node node : cluster.nodes) {
 				Session session = null;
 				try {
-					session = connect(node);
+					session = connect(node.sshUserIdentity, node.hostName, node.sshPort);
 
 					String dataNode = "";
 					String taskTracker = "";
 					for (Daemon daemon : node.daemons) {
-						createPrincipal(daemon);
-						createKeyTab(daemon);
+						createPrincipal(kerberos, daemon);
+						createKeyTab(kerberos, daemon);
 						transferKeyTab(session, daemon);
 
 						if(daemon.type == DaemonType.TASK_TRACKER) {
@@ -53,30 +57,36 @@ public class Application {
 			if(log != null) {
 				log.close();
 			}
+			if(kerberos != null) {
+				kerberos.disconnect();
+			}
 		}
 	}
 
 	private static void transferKeyTab(Session session, Daemon daemon) throws JSchException, SftpException, IOException {
+		execRemote(session, "mkdir -p " + daemon.getNode().keyTab);
+
 		ChannelSftp channel = (ChannelSftp) session.openChannel("sftp");
 		channel.connect();
 		channel.put(getPrincipalKeyTab(daemon), getPrincipalFullKeyTab(daemon));
+		new File(getPrincipalKeyTab(daemon)).delete();
 
 		execRemote(session, "chown " + daemon.getNode().hadoopUser + " " + getPrincipalFullKeyTab(daemon));
 		execRemote(session, "chmod 400 " + getPrincipalFullKeyTab(daemon));
 	}
 
-	private static Session connect(Node node) throws JSchException {
+	private static Session connect(UserIdentity sshUserIdentity, String hostName, int sshPort) throws JSchException {
 		JSch jsch = new JSch();
 		jsch.setKnownHosts("known_hosts.txt");
 		byte[] passphrase;
-		if (node.sshUser.passphrase == null) {
+		if (sshUserIdentity.passphrase == null) {
 			passphrase = null;
 		} else {
-			passphrase = node.sshUser.passphrase.getBytes();
+			passphrase = sshUserIdentity.passphrase.getBytes();
 		}
-		jsch.addIdentity(node.sshUser.privateKeyPath, node.sshUser.publicKeyPath, passphrase);
+		jsch.addIdentity(sshUserIdentity.privateKeyPath, sshUserIdentity.publicKeyPath, passphrase);
 
-		Session session = jsch.getSession(node.sshUser.user, node.hostName, node.sshPort);
+		Session session = jsch.getSession(sshUserIdentity.user, hostName, sshPort);
 		session.setConfig("StrictHostKeyChecking", "no");
 		session.connect();
 
@@ -85,8 +95,8 @@ public class Application {
 
 	private static void appendConfig(Node node, Session session, String file, String properties) throws IOException, JSchException {
 		String oldConfig = execRemote(session, "cat " + node.conf + "/" + file);
-		String newConfig = oldConfig.replace("</configuration>", properties + "</configuration>");
-		execRemote(session, "echo \"" + newConfig+ "\" > " + node.conf + "/" + file);
+		String newConfig = oldConfig.replace("</configuration>", properties + "\n</configuration>");
+		execRemote(session, "echo '" + newConfig+ "' > " + node.conf + "/" + file);
 	}
 
 	private static String execRemote(Session session, String command) throws JSchException, IOException {
@@ -95,11 +105,9 @@ public class Application {
 		ChannelExec connection = null;
 		try {
 			connection = (ChannelExec) session.openChannel("exec");
-
 			connection.setCommand(command);
 
 			InputStream in = connection.getInputStream();
-
 			connection.connect();
 
 			StringBuilder result = new StringBuilder();
@@ -136,20 +144,25 @@ public class Application {
 		}
 	}
 
-	private static void createKeyTab(Daemon daemon) throws IOException, InterruptedException {
-		execLocal(kadminQuery(daemon.getNode().getCluster(),
-				"xst -k " + getPrincipalKeyTab(daemon) + " " + getPrincipalFullName(daemon)));
+	private static void createKeyTab(Session kerberos, Daemon daemon) throws IOException, InterruptedException, JSchException, SftpException {
+		String principalKeyTab = getPrincipalKeyTab(daemon);
+
+		execRemote(kerberos, kadminQuery(daemon.getNode().getCluster(),
+				"xst -k " + principalKeyTab + " " + getPrincipalFullName(daemon)));
+
+		ChannelSftp channel = (ChannelSftp) kerberos.openChannel("sftp");
+		channel.connect();
+		channel.get(principalKeyTab, principalKeyTab);
+		channel.rm(principalKeyTab);
 	}
 
 	private static String kadminQuery(Cluster cluster, String query) {
-		return "kadmin -r " + cluster.realm +
-				" -p " + cluster.rootPrincipal +
-				" -w " + cluster.rootPassword +
+		return "kadmin.local -r " + cluster.realm +
 				" -q \"" + query + "\"";
 	}
 
-	private static void createPrincipal(Daemon daemon) throws IOException, InterruptedException {
-		execLocal(kadminQuery(daemon.getNode().getCluster(),
+	private static void createPrincipal(Session kerberos, Daemon daemon) throws IOException, InterruptedException, JSchException {
+		execRemote(kerberos, kadminQuery(daemon.getNode().getCluster(),
 				"addprinc -randkey " + getPrincipalFullName(daemon)));
 	}
 

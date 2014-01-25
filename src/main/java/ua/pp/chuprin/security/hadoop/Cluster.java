@@ -1,19 +1,29 @@
 package ua.pp.chuprin.security.hadoop;
 
+import ua.pp.chuprin.security.ssh.UserIdentity;
+
 import java.util.ArrayList;
 import java.util.List;
 
 public class Cluster {
 	public final List<Node> nodes;
-	public final String realm;
-	public final String rootPrincipal;
-	public final String rootPassword;
 
-	public Cluster(List<Node> nodes, String realm, String rootPrincipal, String rootPassword) {
+	public final UserIdentity kerberosSsh;
+	public final String realm;
+	public final String rootPrincipalName;
+	public final String rootPrincipalPassword;
+	public final String kerberosHostName;
+	public final int kerberosSshPort;
+
+	public Cluster(List<Node> nodes, UserIdentity kerberosSsh, String realm,
+	               String rootPrincipal, String rootPassword, String kerberosHostName, int kerberosSshPort) {
 		this.nodes = nodes;
+		this.kerberosSsh = kerberosSsh;
 		this.realm = realm;
-		this.rootPrincipal = rootPrincipal;
-		this.rootPassword = rootPassword;
+		this.rootPrincipalName = rootPrincipal;
+		this.rootPrincipalPassword = rootPassword;
+		this.kerberosHostName = kerberosHostName;
+		this.kerberosSshPort = kerberosSshPort;
 	}
 
 	public Daemon getNameNode() {
